@@ -2,14 +2,14 @@ import React, { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { useTheme } from '../context/ThemeContext'
-import { Mic, MicOff, Volume2, VolumeX, X, Bot, Sparkles, Send, Zap, Radio, CheckCircle2 } from 'lucide-react'
+import { Mic, MicOff, Volume2, VolumeX, X, Bot, Sparkles, Send, Zap, Radio, CheckCircle2, Command } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export default function VoiceAssistant() {
   const [isOpen, setIsOpen] = useState(false)
   const [isListening, setIsListening] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
-  const [handsFree, setHandsFree] = useState(false) // Continuous autonomous voice mode
+  const [handsFree, setHandsFree] = useState(true) // Enabled by default for hands-free Alexa voice access
   const [voiceEnabled, setVoiceEnabled] = useState(true)
   const [transcript, setTranscript] = useState('')
   const [lastExecutedAction, setLastExecutedAction] = useState('')
@@ -17,12 +17,12 @@ export default function VoiceAssistant() {
   const [messages, setMessages] = useState([
     {
       sender: 'assistant',
-      text: "🤖 Autonomous AI Voice Agent active! Speak any command like 'Go to dashboard', 'Search Python jobs', 'Start assessment', or 'Change theme to Emerald' — no typing or clicking needed!"
+      text: "🎙️ Alexa Voice AI Active! Say 'Hey Alexa' or press Alt+V to control your app hands-free without using a mouse cursor."
     }
   ])
 
   const { logout } = useAuth()
-  const { setCurrentTheme, themes } = useTheme()
+  const { setCurrentTheme } = useTheme()
   const navigate = useNavigate()
 
   const recognitionRef = useRef(null)
@@ -33,6 +33,20 @@ export default function VoiceAssistant() {
     handsFreeRef.current = handsFree
   }, [handsFree])
 
+  // Setup Global Keyboard Shortcut (Alt + V) to activate Alexa Voice without mouse cursor
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.altKey && (e.key === 'v' || e.key === 'V')) || (e.ctrlKey && e.shiftKey && (e.key === 'V' || e.key === 'v'))) {
+        e.preventDefault()
+        toggleListening()
+        toast('🎙️ Alexa Voice Toggled via Alt+V Hotkey', { icon: '⚡' })
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isListening])
+
+  // Setup Web Speech Recognition
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
     if (SpeechRecognition) {
@@ -56,22 +70,33 @@ export default function VoiceAssistant() {
 
       rec.onend = () => {
         setIsListening(false)
-        // If hands-free continuous mode is enabled, auto-restart listening!
+        // Auto-restart recognition if hands-free continuous mode is active
         if (handsFreeRef.current) {
           setTimeout(() => {
-            try { rec.start() } catch (e) {}
-          }, 400)
+            try {
+              rec.start()
+            } catch (e) {
+              // Ignore already started errors
+            }
+          }, 300)
         }
       }
 
       rec.onerror = (err) => {
         setIsListening(false)
         if (err.error !== 'no-speech' && err.error !== 'aborted') {
-          console.warn('Speech error:', err.error)
+          console.warn('Speech recognition status:', err.error)
         }
       }
 
       recognitionRef.current = rec
+
+      // Auto-start listening on mount if permitted
+      try {
+        rec.start()
+      } catch (e) {
+        // User gesture may be needed initially
+      }
     }
   }, [])
 
@@ -79,7 +104,7 @@ export default function VoiceAssistant() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, isListening])
 
-  // Handle Voice Command when speech ends and we have a transcript
+  // Process Speech Output when User finishes speaking
   useEffect(() => {
     if (!isListening && transcript.trim()) {
       executeAutonomousVoiceCommand(transcript.trim())
@@ -94,9 +119,8 @@ export default function VoiceAssistant() {
     }
 
     if (isListening) {
-      recognitionRef.current.stop()
+      try { recognitionRef.current.stop() } catch (e) {}
       setIsListening(false)
-      setHandsFree(false)
     } else {
       try {
         window.speechSynthesis?.cancel()
@@ -113,14 +137,14 @@ export default function VoiceAssistant() {
     const nextVal = !handsFree
     setHandsFree(nextVal)
     if (nextVal) {
-      toast.success('🟢 Hands-Free Autonomous Voice Mode ENABLED')
-      speakText("Hands free autonomous voice mode enabled. Speak any command anytime.")
+      toast.success('🟢 Alexa Continuous Hands-Free Mode ENABLED')
+      speakText("Alexa hands-free mode enabled. Say Hey Alexa or any command anytime without using your cursor.")
       if (!isListening) {
         try { recognitionRef.current?.start() } catch (e) {}
       }
     } else {
       toast('Hands-Free Mode Disabled')
-      speakText("Hands free mode disabled.")
+      speakText("Hands-free mode paused.")
     }
   }
 
@@ -140,114 +164,135 @@ export default function VoiceAssistant() {
     window.speechSynthesis.speak(utterance)
   }
 
-  // Autonomous AI Action Classifier & Dispatcher
-  const executeAutonomousVoiceCommand = (queryText) => {
+  // Alexa Voice AI Classifier & Navigation Dispatcher
+  const executeAutonomousVoiceCommand = (rawQuery) => {
+    const queryText = rawQuery.trim()
+    const lower = queryText.toLowerCase()
+
+    // Strip wake-words ("alexa", "hey alexa", "alexa ai", "computer")
+    const isAlexaWake = lower.includes('alexa') || lower.includes('hey alexa') || lower.includes('computer')
+    const cleanedCommand = lower.replace(/^(hey\s+)?(alexa|computer|assistant)(\s+ai)?\s*/i, '').trim()
+
+    // If only wake word was spoken, greet and open panel
+    if (isAlexaWake && (!cleanedCommand || cleanedCommand === 'hey' || cleanedCommand === 'hi' || cleanedCommand === 'hello')) {
+      setIsOpen(true)
+      const greeting = "Hello! Alexa Voice AI active. What page or action would you like to access?"
+      setMessages(prev => [...prev, { sender: 'user', text: queryText }, { sender: 'assistant', text: greeting }])
+      speakText(greeting)
+      setLastExecutedAction("Alexa Activated")
+      return
+    }
+
     const userMsg = { sender: 'user', text: queryText }
     setMessages((prev) => [...prev, userMsg])
 
-    const lower = queryText.toLowerCase()
     let reply = ''
     let actionLabel = ''
     let actionCallback = null
 
     // 1. Theme Commands
-    if (lower.includes('theme') || lower.includes('color') || lower.includes('mood')) {
-      if (lower.includes('emerald') || lower.includes('green')) {
+    if (cleanedCommand.includes('theme') || cleanedCommand.includes('color') || cleanedCommand.includes('mode')) {
+      if (cleanedCommand.includes('emerald') || cleanedCommand.includes('green')) {
         setCurrentTheme('emerald')
-        reply = "Autonomous Action: Changed color theme to Cyber Emerald."
+        reply = "Alexa Voice: Switched color theme to Cyber Emerald."
         actionLabel = "Theme -> Cyber Emerald"
-      } else if (lower.includes('sunset') || lower.includes('orange') || lower.includes('red')) {
+      } else if (cleanedCommand.includes('sunset') || cleanedCommand.includes('orange') || cleanedCommand.includes('red')) {
         setCurrentTheme('sunset')
-        reply = "Autonomous Action: Changed color theme to Sunset Flare."
+        reply = "Alexa Voice: Switched color theme to Sunset Flare."
         actionLabel = "Theme -> Sunset Flare"
-      } else if (lower.includes('cyan') || lower.includes('blue') || lower.includes('aqua')) {
+      } else if (cleanedCommand.includes('cyan') || cleanedCommand.includes('blue') || cleanedCommand.includes('aqua')) {
         setCurrentTheme('cyan')
-        reply = "Autonomous Action: Changed color theme to Electric Cyan."
+        reply = "Alexa Voice: Switched color theme to Electric Cyan."
         actionLabel = "Theme -> Electric Cyan"
-      } else if (lower.includes('vapor') || lower.includes('magenta') || lower.includes('pink')) {
+      } else if (cleanedCommand.includes('vapor') || cleanedCommand.includes('magenta') || cleanedCommand.includes('pink')) {
         setCurrentTheme('magenta')
-        reply = "Autonomous Action: Changed color theme to Vaporwave Magenta."
+        reply = "Alexa Voice: Switched color theme to Vaporwave Magenta."
         actionLabel = "Theme -> Vaporwave Magenta"
-      } else if (lower.includes('slate') || lower.includes('nordic')) {
+      } else if (cleanedCommand.includes('slate') || cleanedCommand.includes('nordic')) {
         setCurrentTheme('nordic')
-        reply = "Autonomous Action: Changed color theme to Nordic Slate."
+        reply = "Alexa Voice: Switched color theme to Nordic Slate."
         actionLabel = "Theme -> Nordic Slate"
       } else {
         setCurrentTheme('cosmic')
-        reply = "Autonomous Action: Changed color theme to Cosmic Neon."
+        reply = "Alexa Voice: Switched color theme to Cosmic Neon."
         actionLabel = "Theme -> Cosmic Neon"
       }
     }
 
-    // 2. Navigation & Platform Actions
-    else if (lower.includes('dashboard') || lower.includes('home page')) {
-      reply = "Autonomous AI: Navigating to your dashboard."
-      actionLabel = "Opening Dashboard"
+    // 2. Navigation Pages (Hands-Free Access without Cursor)
+    else if (cleanedCommand.includes('dashboard') || cleanedCommand.includes('home page') || cleanedCommand.includes('main page')) {
+      reply = "Alexa Voice: Opening your Dashboard."
+      actionLabel = "Opened Dashboard"
       actionCallback = () => navigate('/dashboard')
-    } else if (lower.includes('resume') || lower.includes('upload') || lower.includes('cv')) {
-      reply = "Autonomous AI: Opening resume upload screen."
-      actionLabel = "Opening Resume Upload"
+    } else if (cleanedCommand.includes('resume') || cleanedCommand.includes('upload') || cleanedCommand.includes('cv')) {
+      reply = "Alexa Voice: Opening Resume Upload page."
+      actionLabel = "Opened Resume Upload"
       actionCallback = () => navigate('/upload')
-    } else if (lower.includes('assessment') || lower.includes('test') || lower.includes('quiz') || lower.includes('start test')) {
-      reply = "Autonomous AI: Launching your AI skill assessment."
-      actionLabel = "Opening AI Assessment"
+    } else if (cleanedCommand.includes('assessment') || cleanedCommand.includes('test') || cleanedCommand.includes('quiz') || cleanedCommand.includes('exam')) {
+      reply = "Alexa Voice: Launching AI Skill Assessment."
+      actionLabel = "Opened Assessment"
       actionCallback = () => navigate('/assessment')
-    } else if (lower.includes('result') || lower.includes('score')) {
-      reply = "Autonomous AI: Opening assessment results."
-      actionLabel = "Opening Assessment Results"
+    } else if (cleanedCommand.includes('result') || cleanedCommand.includes('score')) {
+      reply = "Alexa Voice: Opening Assessment Results."
+      actionLabel = "Opened Assessment Results"
       actionCallback = () => navigate('/assessment-result')
-    } else if (lower.includes('job') || lower.includes('search') || lower.includes('vacancy')) {
-      if (lower.includes('python')) {
-        reply = "Autonomous AI: Searching Python Developer jobs."
-        actionLabel = "Searching Python Jobs"
+    } else if (cleanedCommand.includes('job') || cleanedCommand.includes('vacancy') || cleanedCommand.includes('career opportunity')) {
+      if (cleanedCommand.includes('python')) {
+        reply = "Alexa Voice: Searching Python Developer jobs."
+        actionLabel = "Searched Python Jobs"
         actionCallback = () => navigate('/jobs?q=python')
-      } else if (lower.includes('react') || lower.includes('frontend')) {
-        reply = "Autonomous AI: Searching Frontend React jobs."
-        actionLabel = "Searching React Jobs"
+      } else if (cleanedCommand.includes('react') || cleanedCommand.includes('frontend')) {
+        reply = "Alexa Voice: Searching Frontend React jobs."
+        actionLabel = "Searched React Jobs"
         actionCallback = () => navigate('/jobs?q=react')
-      } else if (lower.includes('backend')) {
-        reply = "Autonomous AI: Searching Backend Developer jobs."
-        actionLabel = "Searching Backend Jobs"
+      } else if (cleanedCommand.includes('backend')) {
+        reply = "Alexa Voice: Searching Backend Developer jobs."
+        actionLabel = "Searched Backend Jobs"
         actionCallback = () => navigate('/jobs?q=backend')
       } else {
-        reply = "Autonomous AI: Navigating to job recommendations."
-        actionLabel = "Opening Jobs"
+        reply = "Alexa Voice: Opening Job Recommendations page."
+        actionLabel = "Opened Job Recommendations"
         actionCallback = () => navigate('/jobs')
       }
-    } else if (lower.includes('gap') || lower.includes('missing skill')) {
-      reply = "Autonomous AI: Opening skill gap analysis."
-      actionLabel = "Opening Skill Gap"
+    } else if (cleanedCommand.includes('gap') || cleanedCommand.includes('missing skill') || cleanedCommand.includes('skill gap')) {
+      reply = "Alexa Voice: Opening Skill Gap Analysis."
+      actionLabel = "Opened Skill Gap"
       actionCallback = () => navigate('/skill-gap')
-    } else if (lower.includes('roadmap') || lower.includes('career plan')) {
-      reply = "Autonomous AI: Opening career roadmap."
-      actionLabel = "Opening Career Roadmap"
+    } else if (cleanedCommand.includes('roadmap') || cleanedCommand.includes('career plan')) {
+      reply = "Alexa Voice: Opening Career Roadmap."
+      actionLabel = "Opened Career Roadmap"
       actionCallback = () => navigate('/roadmap')
-    } else if (lower.includes('learn') || lower.includes('course') || lower.includes('video')) {
-      reply = "Autonomous AI: Opening learning resources."
-      actionLabel = "Opening Learning Resources"
+    } else if (cleanedCommand.includes('learn') || cleanedCommand.includes('course') || cleanedCommand.includes('resource')) {
+      reply = "Alexa Voice: Opening Learning Resources."
+      actionLabel = "Opened Learning"
       actionCallback = () => navigate('/learning')
-    } else if (lower.includes('interview') || lower.includes('practice')) {
-      reply = "Autonomous AI: Opening interview preparation."
-      actionLabel = "Opening Interview Prep"
+    } else if (cleanedCommand.includes('interview') || cleanedCommand.includes('prep') || cleanedCommand.includes('question')) {
+      reply = "Alexa Voice: Opening Interview Preparation page."
+      actionLabel = "Opened Interview Prep"
       actionCallback = () => navigate('/interview')
-    } else if (lower.includes('logout') || lower.includes('sign out')) {
-      reply = "Autonomous AI: Logging out of your account."
-      actionLabel = "Logging Out"
+    } else if (cleanedCommand.includes('logout') || cleanedCommand.includes('sign out')) {
+      reply = "Alexa Voice: Logging out of your account."
+      actionLabel = "Logged Out"
       actionCallback = () => { logout(); navigate('/') }
+    } else if (cleanedCommand.includes('close') || cleanedCommand.includes('hide') || cleanedCommand.includes('stop')) {
+      reply = "Alexa Voice: Closing voice assistant."
+      actionLabel = "Closed Voice AI"
+      actionCallback = () => setIsOpen(false)
     } else {
-      reply = `Autonomous AI: Recognized command "${queryText}". Executing career analysis now!`
-      actionLabel = `AI Processed: ${queryText}`
+      reply = `Alexa Voice: Executed "${queryText}". Navigating now.`
+      actionLabel = `Alexa Executed: ${queryText}`
     }
 
-    // Execute response and callback
+    // Auto open modal on voice execution so user sees visual feedback hands-free
+    setIsOpen(true)
     setLastExecutedAction(actionLabel || queryText)
-    toast.success(`⚡ AI Action: ${actionLabel || queryText}`)
+    toast.success(`⚡ Alexa AI: ${actionLabel || queryText}`)
 
     setTimeout(() => {
       setMessages((prev) => [...prev, { sender: 'assistant', text: reply }])
       speakText(reply)
       if (actionCallback) actionCallback()
-    }, 300)
+    }, 250)
   }
 
   const handleSubmitText = (e) => {
@@ -259,7 +304,7 @@ export default function VoiceAssistant() {
 
   return (
     <>
-      {/* Top Autonomous AI Action HUD Toast Banner */}
+      {/* Top Hands-Free Alexa Voice Toast Banner */}
       {lastExecutedAction && (
         <div style={{
           position: 'fixed',
@@ -267,11 +312,11 @@ export default function VoiceAssistant() {
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 997,
-          background: 'rgba(11, 15, 25, 0.85)',
+          background: 'rgba(11, 15, 25, 0.88)',
           backdropFilter: 'blur(16px)',
           border: '1px solid var(--primary)',
           borderRadius: 50,
-          padding: '8px 20px',
+          padding: '8px 22px',
           color: 'white',
           fontSize: 13,
           fontWeight: 700,
@@ -282,7 +327,7 @@ export default function VoiceAssistant() {
           animation: 'fadeInDown 0.3s ease-out'
         }}>
           <Zap size={16} color="var(--primary)" className="spin" />
-          <span>Autonomous AI Executed:</span>
+          <span>Alexa Voice AI Executed:</span>
           <span style={{ color: 'var(--primary)', fontWeight: 800 }}>{lastExecutedAction}</span>
           <button
             onClick={() => setLastExecutedAction('')}
@@ -293,7 +338,7 @@ export default function VoiceAssistant() {
         </div>
       )}
 
-      {/* Floating Autonomous AI Voice Launcher */}
+      {/* Floating Autonomous Alexa Voice Launcher */}
       <div style={{
         position: 'fixed',
         bottom: 24,
@@ -308,7 +353,7 @@ export default function VoiceAssistant() {
             setIsOpen(!isOpen)
             if (!isOpen) toggleListening()
           }}
-          title="Autonomous AI Voice Control"
+          title="Alexa Voice AI (Say 'Hey Alexa' or press Alt+V)"
           style={{
             background: isListening ? 'linear-gradient(135deg, #ef4444, #f43f5e)' : 'var(--primary-gradient)',
             color: '#ffffff',
@@ -338,13 +383,20 @@ export default function VoiceAssistant() {
               }} />
             )}
           </div>
-          <span>{isListening ? 'AI Listening...' : 'Autonomous Voice AI'}</span>
+          <span>{isListening ? 'Alexa Listening...' : 'Alexa Voice AI'}</span>
+          <span style={{
+            background: 'rgba(255,255,255,0.2)',
+            padding: '2px 6px',
+            borderRadius: 6,
+            fontSize: 10,
+            letterSpacing: 0.5
+          }}>Alt+V</span>
         </button>
 
-        {/* Hands-Free Autonomous Mode Toggle Badge */}
+        {/* Hands-Free Autonomous Mode Toggle Button */}
         <button
           onClick={toggleHandsFree}
-          title="Toggle Hands-Free Continuous Mode"
+          title="Toggle Cursor-less Hands-Free Continuous Mode"
           style={{
             background: handsFree ? 'rgba(16, 185, 129, 0.25)' : 'rgba(255,255,255,0.06)',
             border: `1px solid ${handsFree ? '#10b981' : 'var(--border-color)'}`,
@@ -397,10 +449,10 @@ export default function VoiceAssistant() {
               </div>
               <div>
                 <h4 style={{ fontSize: 16, fontWeight: 800, color: 'white', margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
-                  Autonomous Voice AI <Zap size={14} color="var(--primary)" />
+                  Alexa Voice AI <Zap size={14} color="var(--primary)" />
                 </h4>
                 <span style={{ fontSize: 11, color: isListening ? '#ef4444' : handsFree ? '#10b981' : 'var(--text-muted)', fontWeight: 700 }}>
-                  ● {isListening ? 'Listening for speech...' : handsFree ? 'Continuous Hands-Free Active' : 'Ready'}
+                  ● {isListening ? 'Listening for speech...' : handsFree ? 'Hands-Free Continuous Listening' : 'Ready'}
                 </span>
               </div>
             </div>
@@ -458,9 +510,9 @@ export default function VoiceAssistant() {
               justifyContent: 'space-between'
             }}>
               <span style={{ fontSize: 12, fontWeight: 700, color: '#10b981', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <CheckCircle2 size={14} /> Fully Hands-Free Mode Active
+                <CheckCircle2 size={14} /> Cursorless Hands-Free Active
               </span>
-              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>No clicking required</span>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>Say "Hey Alexa" or press Alt+V</span>
             </div>
           )}
 
@@ -475,7 +527,7 @@ export default function VoiceAssistant() {
               textAlign: 'center'
             }}>
               <p style={{ fontSize: 12, fontWeight: 700, color: '#fca5a5', margin: 0 }}>
-                🎙️ AI Listening to your voice...
+                🎙️ Alexa is listening to your voice...
               </p>
               {transcript && (
                 <p style={{ fontSize: 13, color: 'white', marginTop: 4, fontWeight: 600, fontStyle: 'italic' }}>
@@ -514,9 +566,9 @@ export default function VoiceAssistant() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Quick Voice Command Chips */}
+          {/* Hands-Free Voice Commands Sample Chips */}
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-            {['Go to dashboard', 'Upload resume', 'Start assessment', 'Search Python jobs', 'Theme Emerald'].map((cmd) => (
+            {['Alexa go to dashboard', 'Alexa upload resume', 'Alexa start assessment', 'Alexa search jobs', 'Alexa interview prep'].map((cmd) => (
               <button
                 key={cmd}
                 onClick={() => executeAutonomousVoiceCommand(cmd)}
@@ -561,7 +613,7 @@ export default function VoiceAssistant() {
               type="text"
               value={inputVal}
               onChange={(e) => setInputVal(e.target.value)}
-              placeholder="Or type voice command..."
+              placeholder="Or type Alexa voice command..."
               style={{ flex: 1, padding: '10px 14px', fontSize: 13 }}
             />
 
